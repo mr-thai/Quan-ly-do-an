@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Callable
 from sqlalchemy import select, or_
 from sqlalchemy.orm import Session
 
@@ -14,18 +14,94 @@ from app.core.security import (
 )
 from app.models import Users, UserRoles, Roles
 
+# System role priority order for defaulting active role
+ROLE_PRIORITY: list[str] = [
+    "ADMIN",
+    "OFFICE",
+    "HEAD_OF_DEPT",
+    "ADVISOR_ROLE",
+    "STUDENT_ROLE",
+]
+
+
 @dataclass
 class UserSession:
-    """Authenticated user session information."""
+    """Authenticated user session information with active role switching capability."""
     user_id: int
     email: str
     full_name: str
     user_code: Optional[str] = None
     phone: Optional[str] = None
     roles: list[str] = field(default_factory=list)
+    active_role: Optional[str] = None
+    active_org_unit_id: Optional[int] = None
+    role_org_mapping: dict[str, Optional[int]] = field(default_factory=dict)
+    _listeners: list[Callable[[str, Optional[int]], None]] = field(default_factory=list, repr=False)
+
+    def __post_init__(self) -> None:
+        # Standardize roles to uppercase
+        self.roles = [r.upper() for r in self.roles]
+
+        # Standardize mapping keys to uppercase
+        self.role_org_mapping = {k.upper(): v for k, v in self.role_org_mapping.items()}
+
+        # Auto-determine default active_role if not provided
+        if not self.active_role and self.roles:
+            selected_role = None
+            for candidate in ROLE_PRIORITY:
+                if candidate in self.roles:
+                    selected_role = candidate
+                    break
+            self.active_role = selected_role or self.roles[0]
+
+        # Initialize active_org_unit_id from mapping if applicable
+        if self.active_role and self.active_org_unit_id is None:
+            self.active_org_unit_id = self.role_org_mapping.get(self.active_role)
 
     def has_role(self, role_code: str) -> bool:
-        return role_code.upper() in [r.upper() for r in self.roles]
+        """Check if user has a specific role (case-insensitive)."""
+        return role_code.upper() in self.roles
+
+    def switch_role(
+        self, new_role: str, org_unit_id: Optional[int] = None
+    ) -> tuple[bool, Optional[str]]:
+        """Switch current active role in session.
+        
+        Validates that user actually possesses the role.
+        Triggers all registered listeners upon successful switch.
+        """
+        role_upper = new_role.upper()
+        if role_upper not in self.roles:
+            return False, f"Người dùng không sở hữu vai trò '{new_role}'."
+
+        self.active_role = role_upper
+        if org_unit_id is not None:
+            self.active_org_unit_id = org_unit_id
+        else:
+            self.active_org_unit_id = self.role_org_mapping.get(role_upper)
+
+        # Notify all registered listeners
+        for callback in self._listeners:
+            try:
+                callback(self.active_role, self.active_org_unit_id)
+            except Exception:
+                pass  # Guard against listener failures affecting session state
+
+        return True, None
+
+    def add_role_switch_listener(
+        self, callback: Callable[[str, Optional[int]], None]
+    ) -> None:
+        """Register a callback to be invoked when active_role is switched."""
+        if callback not in self._listeners:
+            self._listeners.append(callback)
+
+    def remove_role_switch_listener(
+        self, callback: Callable[[str, Optional[int]], None]
+    ) -> None:
+        """Remove a previously registered role switch listener."""
+        if callback in self._listeners:
+            self._listeners.remove(callback)
 
 class AuthService:
     """Service handling user authentication, session creation, and password life cycle."""
@@ -89,9 +165,11 @@ class AuthService:
         # Authentication succeeded - reset attempts
         login_tracker.reset(identifier)
 
-        # Retrieve user roles
-        role_stmt = select(UserRoles.role_code).where(UserRoles.user_id == user.id)
-        user_roles = list(db.scalars(role_stmt).all())
+        # Retrieve user roles and org units
+        role_stmt = select(UserRoles.role_code, UserRoles.org_unit_id).where(UserRoles.user_id == user.id)
+        role_rows = db.execute(role_stmt).all()
+        user_roles = [r[0] for r in role_rows]
+        role_org_mapping = {r[0]: r[1] for r in role_rows}
 
         session_obj = UserSession(
             user_id=user.id,
@@ -100,6 +178,7 @@ class AuthService:
             user_code=user.user_code,
             phone=user.phone,
             roles=user_roles,
+            role_org_mapping=role_org_mapping,
         )
         return session_obj, None
 
