@@ -1,0 +1,8 @@
+DROP TABLE IF EXISTS audit_log;
+DROP TABLE IF EXISTS notifications;
+DROP TABLE IF EXISTS user_roles;
+DROP TABLE IF EXISTS roles;
+DROP TABLE IF EXISTS staff_profiles;
+DROP TABLE IF EXISTS student_profiles;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS org_units;

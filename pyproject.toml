@@ -1,0 +1,22 @@
+[project]
+name = "dacn"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.20.1",
+    "cryptography>=50.0.2",
+    "pymysql>=1.2.3",
+    "pyside6>=6.12.0",
+    "python-dotenv>=1.2.4",
+    "sqlalchemy>=2.1.6",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "sqlacodegen>=4.0.4",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
